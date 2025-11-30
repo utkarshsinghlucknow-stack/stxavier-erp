@@ -1,0 +1,373 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+  />
+  <title>St. Xavier's ERP - Simple Core</title>
+
+  <!-- Tailwind (Play CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+
+  <!-- FontAwesome -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+  />
+
+  <!-- React 18 + Babel -->
+  <script
+    crossorigin
+    src="https://unpkg.com/react@18/umd/react.production.min.js"
+  ></script>
+  <script
+    crossorigin
+    src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"
+  ></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Firebase compat -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        sans-serif;
+      background: #e5e7eb;
+    }
+    .glass {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+    }
+  </style>
+</head>
+<body>
+  <div id="root">Loading...</div>
+
+  <script type="text/babel">
+    // Simple error handler
+    window.onerror = function (msg) {
+      console.error(msg);
+      alert("Error: " + msg);
+    };
+
+    // Firebase config (tumhara)
+    const firebaseConfig = {
+      apiKey: "AIzaSyAcCDfj5UFkeE5m_Fozui9ozYq7uMcbvAo",
+      authDomain: "stxavier0.firebaseapp.com",
+      projectId: "stxavier0",
+      storageBucket: "stxavier0.firebasestorage.app",
+      messagingSenderId: "1056358174808",
+      appId: "1:1056358174808:web:26cb4ff114ac3dd1f9fa2d",
+    };
+
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+    const appId = "stxavier-erp-simple-core";
+
+    // Class-wise fee
+    const CLASS_FEE = {
+      NUR: 380,
+      LKG: 400,
+      UKG: 420,
+      "1st": 450,
+      "2nd": 480,
+      "3rd": 530,
+      "4th": 570,
+      "5th": 600,
+      "6th": 660,
+      "7th": 700,
+      "8th": 750,
+    };
+
+    const App = () => {
+      const [schoolCode, setSchoolCode] = React.useState(
+        localStorage.getItem("school_code") || ""
+      );
+      const [tab, setTab] = React.useState("dashboard");
+      const [students, setStudents] = React.useState([]);
+      const [loading, setLoading] = React.useState(true);
+
+      const [selectedStudent, setSelectedStudent] = React.useState(null);
+      const [feeAmount, setFeeAmount] = React.useState("");
+      const [feeMode, setFeeMode] = React.useState("Cash");
+
+      // Firestore subscribe
+      React.useEffect(() => {
+        if (!schoolCode) return;
+
+        auth.signInAnonymously().catch(console.error);
+
+        const col = db
+          .collection("artifacts")
+          .doc(appId)
+          .collection("public")
+          .doc("data")
+          .collection(`school_data_${schoolCode}`);
+
+        const unsub = col.onSnapshot(
+          (snap) => {
+            const arr = [];
+            snap.forEach((doc) => {
+              if (doc.id === "school_metadata") return;
+              arr.push({ id: doc.id, ...doc.data() });
+            });
+            setStudents(arr);
+            setLoading(false);
+          },
+          (err) => {
+            console.error(err);
+            alert("Firestore error: " + err.message);
+            setLoading(false);
+          }
+        );
+
+        // metadata doc
+        col
+          .doc("school_metadata")
+          .set({ receiptCounter: 1000 }, { merge: true })
+          .catch(console.error);
+
+        return () => unsub();
+      }, [schoolCode]);
+
+      const colRef = React.useMemo(() => {
+        if (!schoolCode) return null;
+        return db
+          .collection("artifacts")
+          .doc(appId)
+          .collection("public")
+          .doc("data")
+          .collection(`school_data_${schoolCode}`);
+      }, [schoolCode]);
+
+      // Admission
+      const handleAdmission = async (e) => {
+        e.preventDefault();
+        if (!colRef) return;
+        const f = new FormData(e.target);
+        const data = Object.fromEntries(f.entries());
+        const fee =
+          CLASS_FEE[data.className] !== undefined
+            ? CLASS_FEE[data.className]
+            : 0;
+
+        await colRef.add({
+          name: data.name,
+          className: data.className,
+          fatherName: data.fatherName,
+          motherName: data.motherName || "",
+          phone: data.phone,
+          rollNo: data.rollNo || "",
+          address: data.address || "",
+          monthlyFee: fee,
+          dueAmount: fee,
+          history: [],
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        });
+
+        alert("Admission saved.");
+        e.target.reset();
+        setTab("students");
+      };
+
+      // Fee collect
+      const handleCollectFee = async () => {
+        if (!selectedStudent || !colRef) return;
+        const amount = Number(feeAmount || 0);
+        if (!amount) {
+          alert("Amount daalo");
+          return;
+        }
+        const metaRef = colRef.doc("school_metadata");
+        const metaSnap = await metaRef.get();
+        let counter = 1000;
+        if (metaSnap.exists && metaSnap.data().receiptCounter) {
+          counter = metaSnap.data().receiptCounter;
+        }
+        const newRcpt = counter + 1;
+        await metaRef.set({ receiptCounter: newRcpt }, { merge: true });
+
+        const tx = {
+          id: crypto.randomUUID(),
+          amount,
+          mode: feeMode,
+          date: firebase.firestore.FieldValue.serverTimestamp(),
+        };
+        const updated = {
+          dueAmount: (selectedStudent.dueAmount || 0) - amount,
+          history: [...(selectedStudent.history || []), tx],
+        };
+        await colRef.doc(selectedStudent.id).set(updated, { merge: true });
+
+        alert("Fee collected. Receipt #" + newRcpt);
+        setFeeAmount("");
+      };
+
+      // Login screen
+      if (!schoolCode) {
+        return (
+          <div className="min-h-screen flex items-center justify-center bg-slate-900">
+            <div className="glass rounded-3xl p-10 max-w-md w-full text-center">
+              <div className="mb-6">
+                <i className="fas fa-school text-4xl text-indigo-600"></i>
+              </div>
+              <h1 className="text-2xl font-bold mb-4 text-slate-900">
+                St. Xavier&apos;s ERP
+              </h1>
+              <p className="text-slate-600 mb-4 text-sm">
+                Enter any school code (example: RAISHREE)
+              </p>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const code = e.target.code.value.trim();
+                  if (!code) return;
+                  localStorage.setItem("school_code", code);
+                  setSchoolCode(code);
+                }}
+                className="space-y-4"
+              >
+                <input
+                  name="code"
+                  placeholder="ENTER SCHOOL CODE"
+                  className="w-full p-3 rounded-2xl bg-slate-100 text-center font-bold tracking-widest"
+                  required
+                />
+                <button className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-semibold">
+                  Login
+                </button>
+              </form>
+            </div>
+          </div>
+        );
+      }
+
+      // Small components
+      const Dashboard = () => {
+        const totalDue = students.reduce(
+          (sum, s) => sum + (s.dueAmount || 0),
+          0
+        );
+        return (
+          <div className="grid md:grid-cols-3 gap-6 mt-6">
+            <div className="glass p-6 rounded-2xl">
+              <div className="text-slate-500 text-sm font-semibold">
+                Total Students
+              </div>
+              <div className="text-3xl font-bold mt-2">{students.length}</div>
+            </div>
+            <div className="glass p-6 rounded-2xl">
+              <div className="text-slate-500 text-sm font-semibold">
+                Total Pending Fees
+              </div>
+              <div className="text-3xl font-bold mt-2 text-red-600">
+                ₹{totalDue}
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      const AdmissionForm = () => (
+        <div className="glass p-6 rounded-2xl max-w-3xl mx-auto mt-6">
+          <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+            <i className="fas fa-file-signature text-indigo-600"></i>
+            Admission Form
+          </h2>
+          <form onSubmit={handleAdmission} className="space-y-4">
+            <input
+              name="name"
+              placeholder="Student Name"
+              className="w-full p-3 rounded-xl border border-slate-200"
+              required
+            />
+            <div className="grid md:grid-cols-2 gap-4">
+              <input
+                name="fatherName"
+                placeholder="Father's Name"
+                className="p-3 rounded-xl border border-slate-200"
+                required
+              />
+              <input
+                name="motherName"
+                placeholder="Mother's Name"
+                className="p-3 rounded-xl border border-slate-200"
+              />
+            </div>
+            <div className="grid md:grid-cols-2 gap-4">
+              <input
+                name="phone"
+                placeholder="Mobile Number"
+                className="p-3 rounded-xl border border-slate-200"
+                required
+              />
+              <select
+                name="className"
+                className="p-3 rounded-xl border border-slate-200"
+                required
+              >
+                <option value="">Select Class</option>
+                <option>NUR</option>
+                <option>LKG</option>
+                <option>UKG</option>
+                <option>1st</option>
+                <option>2nd</option>
+                <option>3rd</option>
+                <option>4th</option>
+                <option>5th</option>
+                <option>6th</option>
+                <option>7th</option>
+                <option>8th</option>
+              </select>
+            </div>
+            <div className="grid md:grid-cols-2 gap-4">
+              <input
+                name="rollNo"
+                placeholder="Roll No (optional)"
+                className="p-3 rounded-xl border border-slate-200"
+              />
+              <input
+                name="address"
+                placeholder="Address"
+                className="p-3 rounded-xl border border-slate-200"
+              />
+            </div>
+            <button className="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold">
+              Save Admission
+            </button>
+          </form>
+        </div>
+      );
+
+      const StudentsView = () => (
+        <div className="glass p-6 rounded-2xl mt-6">
+          <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+            <i className="fas fa-users text-indigo-600"></i>
+            Students
+          </h2>
+          {loading ? (
+            <div>Loading...</div>
+          ) : (
+            <div className="space-y-2 max-h-[60vh] overflow-auto">
+              {students.map((s) => (
+                <div
+                  key={s.id}
+                  className="flex justify-between items-center p-3 border rounded-xl cursor-pointer hover:bg-slate-50"
+                  onClick={() => {
+                    setSelectedStudent(s);
+                    setFeeAmount("");
+                    setTab("fees");
+                  }}
+                >
+                  <div>
+                    <div className="font-semibold">{s.name}</
